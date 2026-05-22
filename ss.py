@@ -1,57 +1,100 @@
 import asyncio
+import json
 import os
-from dotenv import load_dotenv
 
+import uvicorn
+from dotenv import load_dotenv
+from fastapi import FastAPI, Request, WebSocket
+from fastapi.responses import Response
+
+from pipecat.frames.frames import LLMMessagesFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.services.deepgram import DeepgramSTTService
-from pipecat.services.openai import OpenAILLMService, OpenAITTSService
-from pipecat.transports.services.daily import DailyParams, DailyTransport
 from pipecat.processors.aggregators.llm_response import (
     LLMAssistantResponseAggregator,
     LLMUserResponseAggregator,
 )
-from pipecat.frames.frames import LLMMessagesFrame
+from pipecat.serializers.telnyx import TelnyxFrameSerializer
+from pipecat.services.deepgram import DeepgramSTTService
+from pipecat.services.openai import OpenAILLMService, OpenAITTSService
+from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
 
 load_dotenv()
 
-HOTEL_SYSTEM_PROMPT = """Είσαι η Σοφία, η εικονική ρεσεψιονίστ του ξενοδοχείου "Αιγαίο Μπλε" στη Σαντορίνη.
+SYSTEM_PROMPT = """Είσαι η Σοφία, η εικονική ρεσεψιονίστ του παιδικού κομμωτηρίου "Dancing Scissors".
 
 Κανόνες συμπεριφοράς:
 - Απαντάς ΠΑΝΤΑ στα ελληνικά, εκτός αν ο πελάτης μιλήσει άλλη γλώσσα — τότε προσαρμόζεσαι.
-- Είσαι ζεστή, επαγγελματική και σύντομη. Μία πρόταση αρκεί όταν η απάντηση είναι απλή.
-- ΔΕΝ εφευρίσκεις αριθμούς δωματίων ή τιμές που δεν γνωρίζεις — λες ότι θα συνδέσεις τον πελάτη με τον αρμόδιο.
+- Είσαι ζεστή, φιλική και σύντομη. Ο τόνος σου είναι χαρούμενος γιατί μιλάς σε γονείς παιδιών.
+- ΔΕΝ εφευρίσκεις τιμές ή ωράρια που δεν γνωρίζεις — λες ότι θα επικοινωνήσει κάποιος μαζί τους.
+- Για ραντεβού, ακυρώσεις και τιμές παραπέμπεις στο κατάστημα: 210-8001779.
 
-Πληροφορίες ξενοδοχείου:
-- Ώρα check-in: 15:00 | Check-out: 11:00
-- Πισίνα: ανοιχτή 08:00–22:00
-- Εστιατόριο "Καλντέρα": πρωινό 07:30–10:30, δείπνο 19:00–23:00
-- Σπα & wellness: κατόπιν ραντεβού (εσωτερική γραμμή 210)
-- Δωρεάν transfer από/προς αεροδρόμιο Σαντορίνης (JTR) — απαιτείται κράτηση 24ω πριν
-- Για κρατήσεις δωματίων, ακυρώσεις και ειδικά αιτήματα: παραπέμπεις στο reception@aigaio-blue.gr ή εσωτερική γραμμή 0.
+Πληροφορίες επιχείρησης:
+- Όνομα: Dancing Scissors — το πρώτο κομμωτήριο αποκλειστικά για παιδιά και εφήβους στην Ελλάδα
+- Διεύθυνση: Τατοΐου 102, Νέα Ερυθραία, Αθήνα
+- Τηλέφωνο: 210-8001779
+- Υποκατάστημα: Golden Hall (Μαρούσι)
 
-Ξεκίνα πάντα με ένα σύντομο καλωσόρισμα όταν ο πελάτης συνδεθεί."""
+Υπηρεσίες:
+- Κούρεμα παιδιών και εφήβων σε παιχνιδιάρικο περιβάλλον
+- Τα παιδιά παίζουν PlayStation, βλέπουν ταινίες DVD και ζωγραφίζουν κατά τη διάρκεια του κουρέματος
+- Παιδικά πάρτι με περιποίηση νυχιών, φυσικές μάσκες ομορφιάς και επιμελημένα χτενίσματα
+- Όλα τα προϊόντα είναι 100% οργανικά και μη τοξικά — ασφαλή για το ευαίσθητο παιδικό δέρμα
+- Κομμωτές εκπαιδευμένοι ειδικά για παιδιά
+
+Ξεκίνα πάντα με ένα ζεστό καλωσόρισμα όταν ο πελάτης συνδεθεί."""
+
+app = FastAPI()
 
 
-async def main():
-    # --- TRANSPORT ---
-    # Όταν έχεις Daily room URL και token, αυτό συνδέει τη γραμμή SIP/τηλεφώνου.
-    # Βάλε DAILY_ROOM_URL και DAILY_TOKEN στο .env σου.
-    transport = DailyTransport(
-        room_url=os.getenv("DAILY_ROOM_URL"),
-        token=os.getenv("DAILY_TOKEN"),
-        bot_name="Σοφία | AI Ρεσεψιόν",
-        params=DailyParams(
-            audio_in_enabled=True,
-            audio_out_enabled=True,
-        )
+@app.post("/telnyx")
+async def telnyx_webhook(request: Request):
+    """Telnyx webhook — καλείται για κάθε εισερχόμενη κλήση."""
+    host = request.headers.get("host", "localhost")
+    scheme = "wss" if request.headers.get("x-forwarded-proto") == "https" else "ws"
+
+    texml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="{scheme}://{host}/media-stream" />
+  </Connect>
+</Response>"""
+    return Response(content=texml, media_type="application/xml")
+
+
+@app.websocket("/media-stream")
+async def media_stream(websocket: WebSocket):
+    await websocket.accept()
+
+    # Το πρώτο μήνυμα από το Telnyx είναι το 'start' event με metadata κλήσης.
+    raw = await websocket.receive_text()
+    start_event = json.loads(raw)
+    stream_info = start_event.get("start", {})
+    stream_id = stream_info.get("stream_id", "")
+    call_control_id = stream_info.get("call_control_id", "")
+    codec = stream_info.get("codec", "PCMU")
+
+    serializer = TelnyxFrameSerializer(
+        stream_id=stream_id,
+        outbound_encoding=codec,
+        inbound_encoding=codec,
+        call_control_id=call_control_id,
+        api_key=os.getenv("TELNYX_API_KEY"),
     )
 
-    # --- SERVICES ---
+    transport = FastAPIWebsocketTransport(
+        websocket=websocket,
+        params=FastAPIWebsocketParams(
+            serializer=serializer,
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+        ),
+    )
+
     stt = DeepgramSTTService(
         api_key=os.getenv("DEEPGRAM_API_KEY"),
-        language="el",          # Ελληνικά ως προεπιλογή
+        language="el",
         model="nova-2",
     )
 
@@ -62,45 +105,42 @@ async def main():
 
     tts = OpenAITTSService(
         api_key=os.getenv("OPENAI_API_KEY"),
-        voice="nova",           # "nova" ακούγεται πιο φυσικό για ελληνική γυναικεία φωνή
+        voice="nova",
         model="tts-1",
     )
 
-    # --- ΜΝΗΜΗ ΣΥΝΟΜΙΛΙΑΣ ---
-    messages = [{"role": "system", "content": HOTEL_SYSTEM_PROMPT}]
-    tma_in  = LLMUserResponseAggregator(messages)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    tma_in = LLMUserResponseAggregator(messages)
     tma_out = LLMAssistantResponseAggregator(messages)
 
-    # --- PIPELINE ---
     pipeline = Pipeline([
-        transport.input(),   # Εισερχόμενος ήχος από τον καλούντα
-        stt,                 # Speech-to-Text (Deepgram)
-        tma_in,              # Αποθηκεύει αυτό που είπε ο χρήστης στη μνήμη
-        llm,                 # Παράγει απάντηση (GPT-4o-mini)
-        tts,                 # Text-to-Speech (OpenAI)
-        transport.output(),  # Στέλνει τον ήχο πίσω στον καλούντα
-        tma_out,             # Αποθηκεύει την απάντηση στη μνήμη
+        transport.input(),
+        stt,
+        tma_in,
+        llm,
+        tts,
+        transport.output(),
+        tma_out,
     ])
 
     task = PipelineTask(pipeline, PipelineParams(allow_interruptions=True))
 
-    # --- ΑΡΧΙΚΟΣ ΧΑΙΡΕΤΙΣΜΟΣ ---
-    # Μόλις συνδεθεί ο πρώτος συμμετέχων, η Σοφία παίρνει πρωτοβουλία και χαιρετά.
-    @transport.event_handler("on_first_participant_joined")
-    async def on_first_participant_joined(transport, participant):
-        greeting_messages = messages + [
+    @transport.event_handler("on_client_connected")
+    async def on_client_connected(transport, websocket):
+        greeting = messages + [
             {
                 "role": "user",
-                "content": "[Ο πελάτης μόλις συνδέθηκε. Χαιρέτησέ τον συντομα και ρώτα πώς μπορείς να βοηθήσεις.]"
+                "content": "[Ο πελάτης μόλις συνδέθηκε. Χαιρέτησέ τον σύντομα και ρώτα πώς μπορείς να βοηθήσεις.]",
             }
         ]
-        await task.queue_frames([LLMMessagesFrame(greeting_messages)])
+        await task.queue_frames([LLMMessagesFrame(greeting)])
 
-    # --- ΕΚΤΕΛΕΣΗ ---
     runner = PipelineRunner()
-    print("✓ Η AI Ρεσεψιόν 'Σοφία' είναι έτοιμη — αναμένει κλήσεις...")
     await runner.run(task)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    print("✓ AI Ρεσεψιόν 'Σοφία' — http://0.0.0.0:8000")
+    print("  POST /telnyx       → webhook για εισερχόμενες κλήσεις")
+    print("  WS   /media-stream → media stream Telnyx")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
