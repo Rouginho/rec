@@ -1,0 +1,31 @@
+I am building an AI agent system using Python and the pipecat-ai framework. Currently, I have a working environment (venv) with pipecat-ai, openai, and deepgram-sdk installed. I have already successfully tested a terminal-based interface using LocalInputOutputTransport. My ultimate goal is to transition this to a fully functional phone-based AI receptionist using SIP/Telnyx.
+
+Objective:
+I want to upgrade the current terminal-based script to a production-ready structure that is prepared for phone integration. I need a modular Python script that:
+
+    Uses python-dotenv for configuration.
+
+    Implements the Pipecat pipeline logic.
+
+    Includes clear placeholders for DailyTransport (for SIP/Phone handling).
+
+    Has a professional "System Prompt" for a hotel receptionist.
+
+    Includes a conversation memory mechanism (LLM response aggregator) so the agent remembers previous parts of the chat.
+
+Task for Claude Code:
+Please write the complete, clean Python code for ss.py based on the following requirements:
+
+    Imports: Include pipecat, openai, deepgram, and dotenv.
+
+    Memory: Implement LLMUserResponseAggregator and LLMAssistantResponseAggregator to maintain context.
+
+    Service Setup: Properly initialize the OpenAI LLM (gpt-4o-mini) and a Deepgram STT service.
+
+    Structure: Use a main() async function.
+
+    Documentation: Add comments explaining where I need to plug in my DAILY_ROOM_URL and DAILY_TOKEN once I set up the phone transport.
+
+    Robustness: Ensure proper async handling for the pipeline.
+
+Please provide the full code block for ss.py and advise if any additional pip packages are needed for this professional configuration.

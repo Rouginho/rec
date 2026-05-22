@@ -1,0 +1,2 @@
+pipecat-ai[daily,deepgram,openai]==1.2.1
+python-dotenv==1.2.2
