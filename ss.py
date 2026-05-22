@@ -11,13 +11,12 @@ from pipecat.frames.frames import LLMMessagesAppendFrame, LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.llm_response import (
-    LLMAssistantResponseAggregator,
-    LLMUserResponseAggregator,
-)
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.serializers.telnyx import TelnyxFrameSerializer
 from pipecat.services.deepgram import DeepgramSTTService
-from pipecat.services.openai import OpenAILLMService, OpenAITTSService
+from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
 
 load_dotenv()
@@ -109,18 +108,17 @@ async def media_stream(websocket: WebSocket):
         model="tts-1",
     )
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    tma_in = LLMUserResponseAggregator(messages)
-    tma_out = LLMAssistantResponseAggregator(messages)
+    context = LLMContext(messages=[{"role": "system", "content": SYSTEM_PROMPT}])
+    aggregators = LLMContextAggregatorPair(context)
 
     pipeline = Pipeline([
         transport.input(),
         stt,
-        tma_in,
+        aggregators.user(),
         llm,
         tts,
         transport.output(),
-        tma_out,
+        aggregators.assistant(),
     ])
 
     task = PipelineTask(pipeline, PipelineParams(allow_interruptions=True))
