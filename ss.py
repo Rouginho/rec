@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import Response
 
-from pipecat.frames.frames import LLMMessagesFrame
+from pipecat.frames.frames import LLMMessagesAppendFrame, LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -127,13 +127,13 @@ async def media_stream(websocket: WebSocket):
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, websocket):
-        greeting = messages + [
-            {
+        await task.queue_frames([
+            LLMMessagesAppendFrame(messages=[{
                 "role": "user",
                 "content": "[Ο πελάτης μόλις συνδέθηκε. Χαιρέτησέ τον σύντομα και ρώτα πώς μπορείς να βοηθήσεις.]",
-            }
-        ]
-        await task.queue_frames([LLMMessagesFrame(greeting)])
+            }]),
+            LLMRunFrame(),
+        ])
 
     runner = PipelineRunner()
     await runner.run(task)
